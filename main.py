@@ -406,7 +406,7 @@ def update_display(start_time, display_lines):
         print(f"{ICONS['paused']} {colored('Recording Paused', 'yellow')}")
         controls = colored("P=resume  L=listen  S=save  D=discard", "cyan")
     elif state == "preview_playing":
-        print(f"{ICONS['playing']} {colored('Listening to Preview', 'cyan')}")
+        print(f"{ICONS['playing']} {colored('Listening to Preview', "cyan")}")
         controls = colored("Space=pause  S=stop  P=resume rec.", "cyan")
     elif state == "preview_paused":
         print(f"{ICONS['playback_paused']} {colored('Preview Paused', 'yellow')}")
@@ -423,18 +423,334 @@ def update_display(start_time, display_lines):
     
     sys.stdout.flush()
 
+def get_file_duration(file_path):
+    """Get duration of a WAV file in seconds"""
+    try:
+        with wave.open(file_path, 'rb') as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            duration = frames / float(rate)
+            return duration
+    except Exception as e:
+        print(f"Error getting duration for {file_path}: {e}")
+        return 0
+
+def format_duration(seconds):
+    """Format seconds to HH:MM:SS or MM:SS"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    else:
+        return f"{minutes}:{secs:02d}"
+
+def rename_recording(file_index, files):
+    """Rename a recording file"""
+    if file_index < 1 or file_index > len(files):
+        print(colored("Invalid file number!", "red"))
+        time.sleep(1.5)
+        return
+    
+    old_filename = files[file_index - 1]
+    old_filepath = os.path.join(RECORDINGS_DIR, old_filename)
+    
+    clear()
+    print("📝 Rename Recording".center(columns))
+    print(colored("─" * 40, "blue") + "\n")
+    
+    print(f"Current name: {colored(old_filename, 'yellow')}")
+    print("Enter new name (without .wav extension, or press Enter to cancel):")
+    
+    new_name = input(colored("New name: ", "cyan")).strip()
+    
+    if not new_name:
+        print(colored("Rename cancelled.", "yellow"))
+        time.sleep(1.5)
+        return
+    
+    new_name = "".join(c for c in new_name if c.isalnum() or c in " -_()[]")
+    new_name = new_name.strip()
+    
+    if not new_name:
+        print(colored("Invalid name!", "red"))
+        time.sleep(1.5)
+        return
+    
+    if not new_name.lower().endswith('.wav'):
+        new_name += '.wav'
+    
+    new_filepath = os.path.join(RECORDINGS_DIR, new_name)
+    
+    if os.path.exists(new_filepath):
+        print(colored(f"File '{new_name}' already exists!", "red"))
+        time.sleep(1.5)
+        return
+    
+    try:
+        os.rename(old_filepath, new_filepath)
+        print(colored(f"\n✓ Renamed successfully!", "green"))
+        print(colored(f"'{old_filename}' → '{new_name}'", "yellow"))
+        time.sleep(2)
+    except Exception as e:
+        print(colored(f"Error renaming file: {e}", "red"))
+        time.sleep(2)
+
+def delete_recording(file_index, files):
+    """Delete a recording file"""
+    if file_index < 1 or file_index > len(files):
+        print(colored("Invalid file number!", "red"))
+        time.sleep(1.5)
+        return
+    
+    filename = files[file_index - 1]
+    filepath = os.path.join(RECORDINGS_DIR, filename)
+    
+    clear()
+    print("🗑️ Delete Recording".center(columns))
+    print(colored("─" * 40, "blue") + "\n")
+    
+    print(f"File to delete: {colored(filename, 'red')}")
+    
+    try:
+        stat_info = os.stat(filepath)
+        file_size = stat_info.st_size
+        modified_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat_info.st_mtime))
+        
+        print(f"Date: {modified_time}")
+        print(f"Size: {file_size:,} bytes")
+        
+        duration = get_file_duration(filepath)
+        if duration > 0:
+            print(f"Duration: {format_duration(duration)}")
+    except:
+        pass
+    
+    print(colored("\nAre you sure you want to DELETE this recording?", "red"))
+    print(colored("This action cannot be undone!", "red"))
+    
+    confirm = input(colored("\nType 'DELETE' to confirm, or press Enter to cancel: ", "red")).strip()
+    
+    if confirm.upper() == 'DELETE':
+        try:
+            os.remove(filepath)
+            print(colored(f"\n✓ Recording '{filename}' deleted successfully!", "green"))
+            time.sleep(2)
+        except Exception as e:
+            print(colored(f"Error deleting file: {e}", "red"))
+            time.sleep(2)
+    else:
+        print(colored("Deletion cancelled.", "yellow"))
+        time.sleep(1.5)
+
+def play_recording(file_index, files):
+    """Play a recording file"""
+    if file_index < 1 or file_index > len(files):
+        print(colored("Invalid file number!", "red"))
+        time.sleep(1.5)
+        return
+    
+    filename = files[file_index - 1]
+    filepath = os.path.join(RECORDINGS_DIR, filename)
+    
+    clear()
+    print("▶ Playing Recording".center(columns))
+    print(colored("─" * 40, "blue") + "\n")
+    
+    print(f"Now playing: {colored(filename, 'cyan')}")
+    
+    duration = get_file_duration(filepath)
+    if duration > 0:
+        print(f"Duration: {format_duration(duration)}")
+    
+    print("\n" + colored("Controls:", "cyan"))
+    print("  Space = Pause/Resume")
+    print("  S = Stop playback")
+    print("  Any other key = Return to list")
+    print(colored("─" * 40, "blue") + "\n")
+    
+    try:
+        playback_p = pyaudio.PyAudio()
+        
+        with wave.open(filepath, 'rb') as wf:
+            def callback_playback(in_data, frame_count, time_info, status):
+                if playback_event.is_set():
+                    return (None, pyaudio.paComplete)
+                data = wf.readframes(frame_count)
+                return (data, pyaudio.paContinue)
+            
+            playback_stream = playback_p.open(
+                format=playback_p.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True,
+                stream_callback=callback_playback
+            )
+            
+            playback_stream.start_stream()
+            
+            while playback_stream.is_active() and not playback_event.is_set():
+                if sys.platform == 'win32':
+                    import msvcrt
+                    if msvcrt.kbhit():
+                        key = msvcrt.getch().decode('utf-8', errors='ignore').lower()
+                        if key == ' ':
+                            if playback_stream.is_active():
+                                playback_stream.stop_stream()
+                            else:
+                                playback_stream.start_stream()
+                        elif key == 's':
+                            playback_event.set()
+                            break
+                        else:
+                            playback_event.set()
+                            break
+                else:
+                    import select
+                    if select.select([sys.stdin], [], [], 0)[0]:
+                        key = sys.stdin.read(1).lower()
+                        if key == ' ':
+                            if playback_stream.is_active():
+                                playback_stream.stop_stream()
+                            else:
+                                playback_stream.start_stream()
+                        elif key == 's':
+                            playback_event.set()
+                            break
+                        else:
+                            playback_event.set()
+                            break
+                
+                time.sleep(0.1)
+        
+        playback_stream.stop_stream()
+        playback_stream.close()
+        playback_p.terminate()
+        playback_event.clear()
+        
+    except Exception as e:
+        print(colored(f"Playback error: {e}", "red"))
+        time.sleep(2)
+    
+    print(colored("\nPlayback stopped.", "yellow"))
+    time.sleep(1)
+
 def list_of_recordings():
     clear()
     print("📁 Recordings".center(columns))
     print(colored("─" * 40, "blue") + "\n")
     
     files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
+    
     if not files:
         print(colored("No recordings yet", "yellow"))
-    else:
+        print("Record something first!")
+        input("\nPress Enter to return to menu...")
+        return
+    
+    while True:
+        clear()
+        print("📁 Recordings".center(columns))
+        print(colored("─" * 40, "blue") + "\n")
+        
+        print(f"{colored('No.', 'cyan'):<4} {colored('Name', 'cyan'):<35} {colored('Duration', 'cyan'):<12} {colored('Date/Time', 'cyan'):<20}")
+        print(colored("─" * 75, "blue"))
+        
+        total_duration = 0
+        
         for i, f in enumerate(files, 1):
-            print(f"{i}. {f}")
-    input("\nPress Enter to return...")
+            file_path = os.path.join(RECORDINGS_DIR, f)
+            
+            stat_info = os.stat(file_path)
+            modified_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat_info.st_mtime))
+            
+            duration_secs = get_file_duration(file_path)
+            duration_str = format_duration(duration_secs)
+            
+            display_name = f
+            if len(display_name) > 33:
+                display_name = display_name[:30] + "..."
+            
+            print(f"{colored(str(i), 'yellow'):<4} {display_name:<35} {duration_str:<12} {modified_time:<20}")
+            
+            total_duration += duration_secs
+        
+        print(colored("─" * 75, "blue"))
+        
+        print(f"\n{colored('Total:', 'green')} {len(files)} recordings")
+        print(f"{colored('Total duration:', 'green')} {format_duration(total_duration)}")
+        
+        print(f"\n{colored('Options:', 'cyan')}")
+        print("  [number] = Select recording")
+        print("  R = Rename selected recording")
+        print("  D = Delete selected recording")
+        print("  P = Play selected recording")
+        print("  B = Back to main menu")
+        
+        choice = input(colored("\nEnter choice: ", "cyan")).strip().lower()
+        
+        if choice == 'b':
+            return
+        elif choice == 'r':
+            try:
+                file_num = int(input(colored("Enter recording number to rename: ", "yellow")).strip())
+                rename_recording(file_num, files)
+                files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
+            except ValueError:
+                print(colored("Invalid number!", "red"))
+                time.sleep(1.5)
+        elif choice == 'd':
+            try:
+                file_num = int(input(colored("Enter recording number to delete: ", "red")).strip())
+                delete_recording(file_num, files)
+                files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
+            except ValueError:
+                print(colored("Invalid number!", "red"))
+                time.sleep(1.5)
+        elif choice == 'p':
+            try:
+                file_num = int(input(colored("Enter recording number to play: ", "cyan")).strip())
+                play_recording(file_num, files)
+            except ValueError:
+                print(colored("Invalid number!", "red"))
+                time.sleep(1.5)
+        else:
+            try:
+                file_num = int(choice)
+                if 1 <= file_num <= len(files):
+                    filename = files[file_num - 1]
+                    clear()
+                    print(f"📄 Recording: {colored(filename, 'cyan')}".center(columns))
+                    print(colored("─" * 40, "blue") + "\n")
+                    
+                    print(f"{colored('Options for this recording:', 'cyan')}")
+                    print("  1. ▶ Play")
+                    print("  2. 📝 Rename")
+                    print("  3. 🗑️  Delete")
+                    print("  4. ↩ Back to list")
+                    
+                    sub_choice = input(colored("\nSelect option (1-4): ", "cyan")).strip()
+                    
+                    if sub_choice == '1':
+                        play_recording(file_num, files)
+                    elif sub_choice == '2':
+                        rename_recording(file_num, files)
+                        files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
+                    elif sub_choice == '3':
+                        delete_recording(file_num, files)
+                        files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
+                    elif sub_choice == '4':
+                        continue
+                    else:
+                        print(colored("Invalid choice!", "red"))
+                        time.sleep(1.5)
+                else:
+                    print(colored("Invalid recording number!", "red"))
+                    time.sleep(1.5)
+            except ValueError:
+                print(colored("Invalid input!", "red"))
+                time.sleep(1.5)
 
 def main_screen():
     while True:
@@ -445,7 +761,7 @@ def main_screen():
         
         menu_items = [
             ("1. 📝 Record New", "Start a new recording"),
-            ("2. 📁 View Recordings", "List saved recordings"),
+            ("2. 📁 View Recordings", "List, play, rename or delete recordings"),
             ("3. 🗑️  Trash", "Manage deleted files"),
             ("4. ⚙️  Settings", "Configure recorder"),
             ("5. 🚪 Exit", "Close the application")
@@ -481,3 +797,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         clear()
         print(colored("\n👋 Goodbye!\n", "green"))
+        
