@@ -34,7 +34,6 @@ def clear():
 
 columns = shutil.get_terminal_size().columns
 
-# Global variables
 stop_event = Event()
 pause_event = Event()
 playback_event = Event()
@@ -49,9 +48,9 @@ preview_p = None
 preview_stream = None
 is_playing_preview = False
 playback_paused = False
-is_discarding = False  # NEW: Flag to indicate if we're discarding
+is_discarding = False
+save_requested = False
 
-# Simple icons for status
 ICONS = {
     "recording": "●",
     "paused": "❚❚",
@@ -62,17 +61,17 @@ ICONS = {
 def callback(in_data, frame_count, time_info, status):
     if stop_event.is_set():
         return (None, pyaudio.paComplete)
-    
+        
     if pause_event.is_set():
         silence = b'\x00' * (frame_count * CHANNELS * 2)
         return (silence, pyaudio.paContinue)
-    
+        
     with frames_lock:
         frames.append(in_data)
     return (None, pyaudio.paContinue)
 
 def start_recording():
-    global p, stream, frames, recording_start_time, paused_duration, is_discarding
+    global p, stream, frames, recording_start_time, paused_duration, is_discarding, save_requested
     frames = []
     stop_event.clear()
     pause_event.clear()
@@ -80,7 +79,8 @@ def start_recording():
     recording_start_time = time.time()
     paused_duration = 0
     is_discarding = False
-
+    save_requested = False
+    
     p = pyaudio.PyAudio()
     stream = p.open(
         format=FORMAT,
@@ -151,7 +151,7 @@ def play_preview():
             
             while preview_stream.is_active() and not playback_event.is_set():
                 time.sleep(0.1)
-                
+    
     except Exception as e:
         print(f"Playback error: {e}")
     finally:
@@ -186,7 +186,7 @@ def discard_recording():
     global stream, p, frames, is_discarding
     
     stop_event.set()
-    stop_preview()  # also stop any preview
+    stop_preview()  
     
     time.sleep(0.3)
     
@@ -199,7 +199,8 @@ def discard_recording():
     with frames_lock:
         frames.clear()
     
-    is_discarding = True  # Set flag
+    is_discarding = True
+    
     print(colored("\n🗑️  Recording discarded.", "yellow"))
     time.sleep(1.2)
 
@@ -213,22 +214,22 @@ def get_elapsed_time(start_time):
     return str(timedelta(seconds=elapsed_secs))
 
 def stop_recording_and_save(custom_name_ask=False):
-    global stream, p, paused_duration, last_pause_time
+    global stream, p, paused_duration, last_pause_time, save_requested
     stop_event.set()
     
     stop_preview()
     
     if last_pause_time > 0:
         paused_duration += time.time() - last_pause_time
-
+    
     time.sleep(0.4)
-
+    
     if stream:
         stream.stop_stream()
         stream.close()
     if p:
         p.terminate()
-
+    
     timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
     default_name = f"recording_{timestamp}.wav"
     
@@ -248,7 +249,7 @@ def stop_recording_and_save(custom_name_ask=False):
             filename = os.path.join(RECORDINGS_DIR, default_name)
     else:
         filename = os.path.join(RECORDINGS_DIR, default_name)
-
+    
     try:
         wf = wave.open(filename, 'wb')
         wf.setnchannels(CHANNELS)
@@ -258,10 +259,10 @@ def stop_recording_and_save(custom_name_ask=False):
         with frames_lock:
             wf.writeframes(b''.join(frames))
         wf.close()
-
+        
         print("\n" + colored("✓ Saved successfully!", "green"))
         print(colored(f"   {filename}", "yellow"))
-        
+    
     except Exception as e:
         print(colored(f"Error saving file: {e}", "red"))
 
@@ -276,6 +277,8 @@ def get_current_state():
         return "recording"
 
 def record():
+    global save_requested
+    
     clear()
     print("🎤 Voice Recorder".center(columns))
     print(colored("─" * 40, "blue"))
@@ -286,14 +289,14 @@ def record():
     print("\n" + colored("Quick Help:", "cyan"))
     print("  P = Pause/Resume   L = Listen   S = Save   D = Discard   Ctrl+C = Save & Exit")
     print(colored("─" * 40, "blue") + "\n")
-
+    
     try:
         print(f"{ICONS['recording']} Recording...")
         print(f"⏱️  Time: 0:00:00")
         print("\n" + colored("Press 'P' to pause", "yellow"))
         
         display_lines = 4
-
+        
         while True:
             key = None
             if sys.platform == 'win32':
@@ -311,19 +314,22 @@ def record():
             update_display(start_time, display_lines)
             
             time.sleep(0.1)
-
+    
     except KeyboardInterrupt:
         global is_discarding
+        
         print(colored("\n\n⏹️  Stopping...", "yellow"))
-        if not is_discarding:
+        
+        if not is_discarding and not save_requested:
             stop_recording_and_save(custom_name_ask=False)
             print(colored("Recording saved.", "green"))
-        else:
+        elif is_discarding:
             print(colored("Recording discarded, no save performed.", "yellow"))
+        
         input("\nPress Enter to return to menu...")
 
 def handle_keypress(key, start_time):
-    global last_pause_time, paused_duration
+    global last_pause_time, paused_duration, save_requested
     
     state = get_current_state()
     
@@ -332,7 +338,7 @@ def handle_keypress(key, start_time):
             print(colored("\n⏹️  Stop listening first (press S)", "red"))
             time.sleep(1)
             return
-            
+        
         if state == "recording_paused":
             resume_recording()
         else:
@@ -344,12 +350,12 @@ def handle_keypress(key, start_time):
             print(colored("\n⏸️  Pause recording first (press P)", "red"))
             time.sleep(1)
             return
-            
+        
         if state in ("preview_playing", "preview_paused"):
             print(colored("\n🎧 Already listening", "yellow"))
             time.sleep(1)
             return
-            
+        
         preview_thread = Thread(target=play_preview, daemon=True)
         preview_thread.start()
         time.sleep(0.1)
@@ -361,20 +367,21 @@ def handle_keypress(key, start_time):
             time.sleep(0.8)
         else:
             print(colored("\nSaving now...", "yellow"))
+            save_requested = True 
             stop_recording_and_save(custom_name_ask=True)
-            raise KeyboardInterrupt  # exit recording screen
+            raise KeyboardInterrupt
     
-    elif key == 'd':  # DISCARD
+    elif key == 'd':
         if is_playing_preview:
             print(colored("\nStop listening first (press S)", "red"))
             time.sleep(1.2)
             return
-            
+        
         print(colored("\nAre you sure you want to DISCARD this recording? (y/N): ", "red"), end="")
         confirm = input().strip().lower()
         if confirm in ('y', 'yes'):
             discard_recording()
-            raise KeyboardInterrupt  # exit recording screen after discard
+            raise KeyboardInterrupt
         else:
             print(colored("Discard cancelled.", "green"))
             time.sleep(0.8)
@@ -390,7 +397,7 @@ def update_display(start_time, display_lines):
     state = get_current_state()
     
     sys.stdout.write(f"\033[{display_lines}A")
-    sys.stdout.write("\033[2K")  # Clear line
+    sys.stdout.write("\033[2K")
     
     if state == "recording":
         print(f"{colored(ICONS['recording'], 'red')} {colored('Recording...', 'green')}")
@@ -449,7 +456,7 @@ def main_screen():
             print(f"   {colored(desc, 'blue')}\n")
         
         choice = input(colored("Select option (1-5): ", "cyan")).strip()
-
+        
         if choice == "1":
             record()
         elif choice == "2":
