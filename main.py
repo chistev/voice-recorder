@@ -18,6 +18,9 @@ RECORDINGS_DIR = "recordings"
 
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
+sort_key = "date"       # "date", "name", "duration"
+sort_reverse = True     # True = descending, False = ascending
+
 def colored(text, color):
     colors = {
         "red": "\033[91m",
@@ -25,6 +28,7 @@ def colored(text, color):
         "yellow": "\033[93m",
         "blue": "\033[94m",
         "cyan": "\033[96m",
+        "magenta": "\033[95m",
         "reset": "\033[0m"
     }
     return f"{colors.get(color, '')}{text}{colors['reset']}"
@@ -182,7 +186,6 @@ def resume_preview():
         playback_paused = False
 
 def discard_recording():
-    """Stop recording and throw away everything"""
     global stream, p, frames, is_discarding
     
     stop_event.set()
@@ -406,7 +409,7 @@ def update_display(start_time, display_lines):
         print(f"{ICONS['paused']} {colored('Recording Paused', 'yellow')}")
         controls = colored("P=resume  L=listen  S=save  D=discard", "cyan")
     elif state == "preview_playing":
-        print(f"{ICONS['playing']} {colored('Listening to Preview', "cyan")}")
+        print(f"{ICONS['playing']} {colored('Listening to Preview', 'cyan')}")
         controls = colored("Space=pause  S=stop  P=resume rec.", "cyan")
     elif state == "preview_paused":
         print(f"{ICONS['playback_paused']} {colored('Preview Paused', 'yellow')}")
@@ -424,7 +427,6 @@ def update_display(start_time, display_lines):
     sys.stdout.flush()
 
 def get_file_duration(file_path):
-    """Get duration of a WAV file in seconds"""
     try:
         with wave.open(file_path, 'rb') as wf:
             frames = wf.getnframes()
@@ -436,7 +438,6 @@ def get_file_duration(file_path):
         return 0
 
 def format_duration(seconds):
-    """Format seconds to HH:MM:SS or MM:SS"""
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
@@ -447,7 +448,6 @@ def format_duration(seconds):
         return f"{minutes}:{secs:02d}"
 
 def rename_recording(file_index, files):
-    """Rename a recording file"""
     if file_index < 1 or file_index > len(files):
         print(colored("Invalid file number!", "red"))
         time.sleep(1.5)
@@ -498,7 +498,6 @@ def rename_recording(file_index, files):
         time.sleep(2)
 
 def delete_recording(file_index, files):
-    """Delete a recording file"""
     if file_index < 1 or file_index > len(files):
         print(colored("Invalid file number!", "red"))
         time.sleep(1.5)
@@ -545,7 +544,6 @@ def delete_recording(file_index, files):
         time.sleep(1.5)
 
 def play_recording(file_index, files):
-    """Play a recording file"""
     if file_index < 1 or file_index > len(files):
         print(colored("Invalid file number!", "red"))
         time.sleep(1.5)
@@ -636,121 +634,179 @@ def play_recording(file_index, files):
     print(colored("\nPlayback stopped.", "yellow"))
     time.sleep(1)
 
+# ────────────────────────────────────────────────
+#               SORTING SUPPORT
+# ────────────────────────────────────────────────
+
+def get_sort_key_func(key):
+    if key == "date":
+        def sort_func(f):
+            path = os.path.join(RECORDINGS_DIR, f)
+            try:
+                return os.path.getmtime(path)
+            except:
+                return 0
+        return sort_func
+    
+    elif key == "name":
+        return lambda f: f.lower()
+    
+    elif key == "duration":
+        def dur_func(f):
+            path = os.path.join(RECORDINGS_DIR, f)
+            return get_file_duration(path)
+        return dur_func
+    
+    return lambda f: 0  # fallback
+
+
 def list_of_recordings():
-    clear()
-    print("📁 Recordings".center(columns))
-    print(colored("─" * 40, "blue") + "\n")
-    
-    files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
-    
-    if not files:
-        print(colored("No recordings yet", "yellow"))
-        print("Record something first!")
-        input("\nPress Enter to return to menu...")
-        return
-    
+    global sort_key, sort_reverse
+
     while True:
         clear()
         print("📁 Recordings".center(columns))
         print(colored("─" * 40, "blue") + "\n")
+
+        files = [f for f in os.listdir(RECORDINGS_DIR) if f.lower().endswith(".wav")]
         
+        if not files:
+            print(colored("No recordings yet", "yellow"))
+            print("Record something first!")
+            input("\nPress Enter to return to menu...")
+            return
+
+        sort_func = get_sort_key_func(sort_key)
+        files = sorted(files, key=sort_func, reverse=sort_reverse)
+
+        # Show current sort status
+        sort_names = {"date": "Date Created", "name": "Name", "duration": "Duration"}
+        sort_name = sort_names.get(sort_key, "Unknown")
+        order_name = "↓ Newest first" if sort_key == "date" and sort_reverse else \
+                     "↓ Descending" if sort_reverse else "↑ Ascending"
+        
+        print(f"  Sorted by: {colored(sort_name, 'cyan')} {colored(order_name, 'magenta')}")
+        print(colored("─" * 75, "blue"))
+
         print(f"{colored('No.', 'cyan'):<4} {colored('Name', 'cyan'):<35} {colored('Duration', 'cyan'):<12} {colored('Date/Time', 'cyan'):<20}")
         print(colored("─" * 75, "blue"))
-        
+
         total_duration = 0
-        
+
         for i, f in enumerate(files, 1):
-            file_path = os.path.join(RECORDINGS_DIR, f)
+            path = os.path.join(RECORDINGS_DIR, f)
             
-            stat_info = os.stat(file_path)
-            modified_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat_info.st_mtime))
+            try:
+                stat = os.stat(path)
+                mtime_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
+            except:
+                mtime_str = "—"
+
+            dur_sec = get_file_duration(path)
+            dur_str = format_duration(dur_sec)
             
-            duration_secs = get_file_duration(file_path)
-            duration_str = format_duration(duration_secs)
+            display_name = f if len(f) <= 33 else f[:30] + "..."
+
+            print(f"{colored(str(i), 'yellow'):<4} {display_name:<35} {dur_str:<12} {mtime_str:<20}")
             
-            display_name = f
-            if len(display_name) > 33:
-                display_name = display_name[:30] + "..."
-            
-            print(f"{colored(str(i), 'yellow'):<4} {display_name:<35} {duration_str:<12} {modified_time:<20}")
-            
-            total_duration += duration_secs
-        
+            total_duration += dur_sec
+
         print(colored("─" * 75, "blue"))
         
-        print(f"\n{colored('Total:', 'green')} {len(files)} recordings")
-        print(f"{colored('Total duration:', 'green')} {format_duration(total_duration)}")
+        print(f"\n{colored('Total:', 'green')} {len(files)} recordings • {format_duration(total_duration)} total duration")
         
-        print(f"\n{colored('Options:', 'cyan')}")
-        print("  [number] = Select recording")
-        print("  R = Rename selected recording")
-        print("  D = Delete selected recording")
-        print("  P = Play selected recording")
-        print("  B = Back to main menu")
-        
+        print(f"\n{colored('Commands:', 'cyan')}")
+        print("  [number]     select & view options for recording")
+        print("  s            change Sort field")
+        print("  o            toggle Order (asc/desc)")
+        print("  r / d / p    Rename / Delete / Play  (then enter number)")
+        print("  b            Back to main menu")
+
         choice = input(colored("\nEnter choice: ", "cyan")).strip().lower()
-        
+
         if choice == 'b':
             return
-        elif choice == 'r':
+
+        elif choice == 's':
+            clear()
+            print("Change sort field:\n")
+            print("  1   Date created")
+            print("  2   Name")
+            print("  3   Duration")
+            print(f"\nCurrent: {colored(sort_name, 'cyan')}")
+            
+            s = input(colored("\nSelect (1-3) or Enter to cancel: ", "cyan")).strip()
+            if s == '1':
+                sort_key = "date"
+            elif s == '2':
+                sort_key = "name"
+            elif s == '3':
+                sort_key = "duration"
+            continue
+
+        elif choice == 'o':
+            sort_reverse = not sort_reverse
+            print(colored(f"\nOrder changed to: {'Descending' if sort_reverse else 'Ascending'}", "green"))
+            time.sleep(1.2)
+            continue
+
+        elif choice in ('r', 'd', 'p'):
             try:
-                file_num = int(input(colored("Enter recording number to rename: ", "yellow")).strip())
-                rename_recording(file_num, files)
-                files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
-            except ValueError:
+                num_str = input(colored(f"Enter number to { {'r':'rename','d':'delete','p':'play'}[choice] }: ", "yellow")).strip()
+                num = int(num_str)
+                if choice == 'r':
+                    rename_recording(num, files)
+                elif choice == 'd':
+                    delete_recording(num, files)
+                elif choice == 'p':
+                    play_recording(num, files)
+            except:
                 print(colored("Invalid number!", "red"))
                 time.sleep(1.5)
-        elif choice == 'd':
-            try:
-                file_num = int(input(colored("Enter recording number to delete: ", "red")).strip())
-                delete_recording(file_num, files)
-                files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
-            except ValueError:
-                print(colored("Invalid number!", "red"))
-                time.sleep(1.5)
-        elif choice == 'p':
-            try:
-                file_num = int(input(colored("Enter recording number to play: ", "cyan")).strip())
-                play_recording(file_num, files)
-            except ValueError:
-                print(colored("Invalid number!", "red"))
-                time.sleep(1.5)
+            continue
+
         else:
+            # Number → detail view
             try:
-                file_num = int(choice)
-                if 1 <= file_num <= len(files):
-                    filename = files[file_num - 1]
+                num = int(choice)
+                if 1 <= num <= len(files):
+                    filename = files[num - 1]
                     clear()
                     print(f"📄 Recording: {colored(filename, 'cyan')}".center(columns))
                     print(colored("─" * 40, "blue") + "\n")
+
+                    path = os.path.join(RECORDINGS_DIR, filename)
+                    try:
+                        mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(path)))
+                    except:
+                        mtime = "—"
+                    dur = format_duration(get_file_duration(path))
+
+                    print(f"  Name:       {colored(filename, 'yellow')}")
+                    print(f"  Duration:   {colored(dur, 'green')}")
+                    print(f"  Modified:   {colored(mtime, 'blue')}")
                     
-                    print(f"{colored('Options for this recording:', 'cyan')}")
-                    print("  1. ▶ Play")
-                    print("  2. 📝 Rename")
-                    print("  3. 🗑️  Delete")
-                    print("  4. ↩ Back to list")
-                    
-                    sub_choice = input(colored("\nSelect option (1-4): ", "cyan")).strip()
-                    
-                    if sub_choice == '1':
-                        play_recording(file_num, files)
-                    elif sub_choice == '2':
-                        rename_recording(file_num, files)
-                        files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
-                    elif sub_choice == '3':
-                        delete_recording(file_num, files)
-                        files = sorted([f for f in os.listdir(RECORDINGS_DIR) if f.endswith(".wav")])
-                    elif sub_choice == '4':
-                        continue
-                    else:
-                        print(colored("Invalid choice!", "red"))
-                        time.sleep(1.5)
+                    print(f"\n{colored('Options:', 'cyan')}")
+                    print("  1   ▶ Play")
+                    print("  2   📝 Rename")
+                    print("  3   🗑️  Delete")
+                    print("  4   ↩ Back to list")
+
+                    sub = input(colored("\nSelect (1-4): ", "cyan")).strip()
+
+                    if sub == '1':
+                        play_recording(num, files)
+                    elif sub == '2':
+                        rename_recording(num, files)
+                    elif sub == '3':
+                        delete_recording(num, files)
+                    # else → back
                 else:
-                    print(colored("Invalid recording number!", "red"))
+                    print(colored("Number out of range!", "red"))
                     time.sleep(1.5)
             except ValueError:
-                print(colored("Invalid input!", "red"))
-                time.sleep(1.5)
+                print(colored("Invalid input", "red"))
+                time.sleep(1.2)
 
 def main_screen():
     while True:
@@ -797,4 +853,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         clear()
         print(colored("\n👋 Goodbye!\n", "green"))
+        sys.exit(0)
         
